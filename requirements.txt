@@ -1,0 +1,2 @@
+sudo apt install python3-pyqt6 python3-pil ffmpeg slop maim
+il est conseillé de passer sous x11 Se déconnecter>en bas à gauche sélectionner x11 au lieu de waylandcar wayland empeche la capture d'écran
