@@ -1,9 +1,9 @@
 import sys
 import os
 import time
-from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QLabel, QFileDialog
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import QTimer, QRect
+from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QLabel, QFileDialog, QInputDialog, QHBoxLayout, QLineEdit, QColorDialog
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+from PyQt6.QtCore import QTimer, QRect, Qt, QPoint
 import subprocess
 import os
 
@@ -14,25 +14,24 @@ class ScreenRecorderApp(QWidget):
         super().__init__()
 
         self.setWindowTitle("Screen Tool")
-        self.setGeometry(100, 100, 400, 300)
+        self.setFixedSize(400, 100)
 
         layout = QVBoxLayout()
-
+        subheader_layout = QHBoxLayout()
+        
         # Screenshot
-        self.capture_button = QPushButton("Capture Area")
+        self.capture_button = QPushButton("Screenshot")
         self.capture_button.clicked.connect(self.capture_screen)
-        layout.addWidget(self.capture_button)
-
-        self.image_label = QLabel("No capture taken")
-        layout.addWidget(self.image_label)
-
-        # Video recording
-        self.record_button = QPushButton("Select Area and Record")
+        subheader_layout.addWidget(self.capture_button)
+        
+        self.record_button = QPushButton("Recording")
         self.record_button.clicked.connect(self.toggle_recording)
         layout.addWidget(self.record_button)
+        
+        layout.addLayout(subheader_layout)
 
-        self.timer_label = QLabel("")
-        layout.addWidget(self.timer_label)
+        self.info_label = QLabel("")
+        layout.addWidget(self.info_label)
 
         self.setLayout(layout)
 
@@ -43,6 +42,7 @@ class ScreenRecorderApp(QWidget):
         self.timer.timeout.connect(self.update_timer)
 
         self.capture_rect = None  # Selected area
+        self.selected_shape = None  # Selected shape
 
     def select_area(self):
         """Uses `slop` to select an area on the screen and returns its coordinates"""
@@ -66,8 +66,13 @@ class ScreenRecorderApp(QWidget):
                     save_path += ".jpg"
                 x, y, w, h = self.capture_rect.x(), self.capture_rect.y(), self.capture_rect.width(), self.capture_rect.height()
                 subprocess.run(["maim", "-g", f"{w}x{h}+{x}+{y}", save_path])
-                self.image_label.setText(f"Capture saved: {save_path}")
-                self.image_label.setPixmap(QPixmap(save_path).scaled(200, 200))
+                self.info_label.setText(f"Capture saved: {save_path}")
+                self.edit_image(save_path)
+
+    def edit_image(self, image_path):
+        """Opens the captured image for editing"""
+        self.image_editor = ImageEditor(image_path, self)
+        self.image_editor.show()
 
     def toggle_recording(self):
         """Starts or stops video recording of a selected area"""
@@ -122,14 +127,144 @@ class ScreenRecorderApp(QWidget):
             self.record_process.terminate()
             self.record_process.wait()
             self.recording = False
-            self.record_button.setText("Select Area and Record")
+            self.record_button.setText("Recording")
             self.timer.stop()
-            self.timer_label.setText("Recording finished")
+            self.info_label.setText("Recording finished")
 
     def update_timer(self):
         """Displays the elapsed time during recording."""
         elapsed = int(time.time() - self.start_time)
-        self.timer_label.setText(f"Recording time: {elapsed}s")
+        self.info_label.setText(f"Recording time: {elapsed}s")
+
+class ImageEditor(QWidget):
+    def __init__(self, image_path, parent):
+        super().__init__()
+        self.setWindowTitle("Image Editor")
+        self.setGeometry(100, 100, 800, 600)
+        self.image_path = image_path
+        self.image = QPixmap(image_path)
+        self.drawing = False
+        self.last_point = None
+        self.shapes = []
+        self.parent = parent
+        self.text_edit = None
+        self.color = QColor(255, 0, 0)
+        self.temp_shape = None
+        self.temp_tracing = None
+
+        layout = QVBoxLayout()
+        button_layout = QHBoxLayout()
+
+        # Shape selection button
+        self.shape_button = QPushButton("Select Shape")
+        self.shape_button.clicked.connect(self.select_shape)
+        button_layout.addWidget(self.shape_button)
+
+        # Text button
+        self.text_button = QPushButton("Add Text")
+        self.text_button.clicked.connect(self.add_text)
+        button_layout.addWidget(self.text_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        
+
+    def select_shape(self):
+        shapes = ["Rectangle", "Circle", "Triangle", "Line"]
+        shape, ok = QInputDialog.getItem(self, "Select Shape", "Shape:", shapes, 0, False)
+        self.color = QColorDialog.getColor()
+        if ok:
+            self.parent.selected_shape = shape
+
+    def add_text(self):
+        self.color = QColorDialog.getColor()
+        self.parent.selected_shape = "Text"
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self.image)
+        pen = QPen(self.color, 3)
+        painter.setPen(pen)
+        for shape in self.shapes:
+            if shape['type'] == 'line':
+                painter.drawLine(shape['start'], shape['end'])
+            elif shape['type'] == 'rect':
+                painter.drawRect(QRect(shape['start'], shape['end']))
+            elif shape['type'] == 'circle':
+                self.temp_tracing = QRect(shape['start'], shape['end'])
+                painter.drawEllipse(self.temp_tracing)
+            elif shape['type'] == 'triangle':
+                self.temp_tracing = [
+                    shape['start'],
+                    QPoint(shape['end'].x(), shape['start'].y()),
+                    QPoint((shape['start'].x() + shape['end'].x()) // 2, shape['end'].y())
+                ]
+                painter.drawPolygon(*self.temp_tracing)
+            elif shape['type'] == 'text':
+                painter.drawText(shape['start'], shape['text'])
+        if hasattr(self, 'temp_shape') and self.temp_shape:
+            if self.temp_shape['type'] == 'rect':
+                painter.drawRect(QRect(self.temp_shape['start'], self.temp_shape['end']))
+            elif self.temp_shape['type'] == 'circle':
+                self.temp_tracing = QRect(self.temp_shape['start'], self.temp_shape['end'])
+                painter.drawEllipse(self.temp_tracing)
+            elif self.temp_shape['type'] == 'triangle':
+                self.temp_tracing = [
+                    self.temp_shape['start'],
+                    QPoint(self.temp_shape['end'].x(), self.temp_shape['start'].y()),
+                    QPoint((self.temp_shape['start'].x() + self.temp_shape['end'].x()) // 2, self.temp_shape['end'].y())
+                ]
+                painter.drawPolygon(*self.temp_tracing)
+
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drawing = True
+            self.last_point = event.position().toPoint()
+            self.start_point = self.last_point  # Store the start point for shapes
+
+            if self.parent.selected_shape == "Text":
+                self.text_edit = QLineEdit(self)
+                self.text_edit.move(self.last_point.x() - self.text_edit.width(), self.last_point.y() - self.text_edit.height())
+                self.text_edit.setFixedWidth(200)
+                self.text_edit.returnPressed.connect(self.finish_text)
+                self.text_edit.show()
+                self.text_edit.setFocus()
+
+    def mouseMoveEvent(self, event):
+        if self.drawing:
+            current_point = event.position().toPoint()
+            if self.parent.selected_shape == "None":
+                self.shapes.append({'type': 'line', 'start': self.last_point, 'end': current_point, 'color': self.color})
+                self.last_point = current_point
+            elif self.parent.selected_shape == "Rectangle":
+                self.temp_shape = {'type': 'rect', 'start': self.start_point, 'end': current_point, 'color': self.color}
+            elif self.parent.selected_shape == "Circle":
+                self.temp_shape = {'type': 'circle', 'start': self.start_point, 'end': current_point, 'color': self.color}
+            elif self.parent.selected_shape == "Triangle":
+                self.temp_shape = {'type': 'triangle', 'start': self.start_point, 'end': current_point, 'color': self.color}
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drawing = False
+            if self.temp_shape:
+                if self.parent.selected_shape == "Rectangle":
+                    self.shapes.append(self.temp_shape)
+                elif self.parent.selected_shape == "Circle":
+                    self.shapes.append(self.temp_shape)
+                elif self.parent.selected_shape == "Triangle":
+                    self.shapes.append(self.temp_shape)
+            self.temp_shape = None
+            self.update()
+
+    def finish_text(self):
+        text = self.text_edit.text()
+        self.shapes.append({'type': 'text', 'start': self.last_point, 'text': text, 'color': self.color})
+        self.text_edit.deleteLater()
+        self.text_edit = None
+        self.update()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
